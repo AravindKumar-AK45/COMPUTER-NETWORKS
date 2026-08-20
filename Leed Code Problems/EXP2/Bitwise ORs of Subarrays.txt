@@ -1,0 +1,24 @@
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+
+public class Solution {
+    public int subarrayBitwiseORs(int[] arr) {
+        HashSet<Integer> totalDistinctOrs = new HashSet<>();
+        List<Integer> rollingOrs = new ArrayList<>();
+        int prevStartIndex = 0;
+        for (int num : arr) {
+            int currentSize = rollingOrs.size();
+            rollingOrs.add(num);
+            for (int i = prevStartIndex; i < currentSize; i++) {
+                int nextOrValue = rollingOrs.get(i) | num;
+                if (rollingOrs.get(rollingOrs.size() - 1) != nextOrValue) {
+                    rollingOrs.add(nextOrValue);
+                }
+            }
+            prevStartIndex = currentSize;
+        }
+        totalDistinctOrs.addAll(rollingOrs);
+        return totalDistinctOrs.size();
+    }
+}
