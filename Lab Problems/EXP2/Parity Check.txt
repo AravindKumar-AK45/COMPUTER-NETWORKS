@@ -1,0 +1,190 @@
+Own_Parity.c
+#include <stdio.h>
+#include <string.h>
+
+/* Convert one character into its 7-bit binary representation */
+void toBinary7(char ch, char out[])
+{
+    int value = ch;
+
+    for (int i = 6; i >= 0; i--)
+    {
+        out[i] = (value & 1) ? '1' : '0';
+        value >>= 1;
+    }
+
+    out[7] = '\0';
+}
+
+/* Append an 8th (even-parity) bit to the 7-bit data */
+void addEvenParity(char data[], char byte[])
+{
+    int count = 0;
+
+    for (int i = 0; i < 7; i++)
+    {
+        byte[i] = data[i];
+
+        if (data[i] == '1')
+            count++;
+    }
+
+    if (count % 2 == 0)
+        byte[7] = '0';
+    else
+        byte[7] = '1';
+
+    byte[8] = '\0';
+}
+
+/* Print a section header banner */
+void printHeader(const char *title)
+{
+    printf("\n+------------------------------------------+\n");
+    printf("| %-40s |\n", title);
+    printf("+------------------------------------------+\n");
+}
+
+/* Print a bit-stream, with a byte index above each 8-bit group */
+void printByte(char out[])
+{
+    int len = strlen(out);
+    int totalBytes = len / 8;
+
+    printf("       ");
+    for (int b = 1; b <= totalBytes; b++)
+        printf(" Byte%-2d  ", b);
+    printf("\n");
+
+    printf("Bits : ");
+    for (int i = 0; out[i] != '\0'; i++)
+    {
+        if (i > 0 && i % 8 == 0)
+            printf(" | ");
+
+        printf("%c", out[i]);
+    }
+    printf("\n");
+}
+
+/* Check even parity for every 8-bit byte in the stream */
+void parityCheck(char out[])
+{
+    int byteNo = 1;
+
+    printf("+--------+----------+----------------------+\n");
+    printf("| %-6s | %-8s | %-20s |\n", "Byte", "Ones", "Status");
+    printf("+--------+----------+----------------------+\n");
+
+    for (int i = 0; out[i] != '\0'; i += 8)
+    {
+        int count = 0;
+
+        for (int j = 0; j < 8; j++)
+        {
+            if (out[i + j] == '1')
+                count++;
+        }
+
+        printf("| %-6d | %-8d | %-20s |\n",
+               byteNo,
+               count,
+               (count % 2 == 0) ? "OK  (Even Parity)" : "FAIL (Parity Error)");
+
+        byteNo++;
+    }
+
+    printf("+--------+----------+----------------------+\n");
+}
+
+/* Let the user simulate transmission errors by flipping chosen bits */
+void change(char out[])
+{
+    int totalBytes = strlen(out) / 8;
+    int targetByte, totalChanges, bitPos;
+    char choice;
+
+    printHeader("Simulate Transmission Error");
+
+    printf(">> Do you want to change any bit? (y/n): ");
+    scanf(" %c", &choice);
+
+    if (choice != 'y' && choice != 'Y')
+        return;
+
+    printf(">> Which byte do you want to change? (1-%d): ", totalBytes);
+    scanf("%d", &targetByte);
+
+    if (targetByte < 1 || targetByte > totalBytes)
+    {
+        printf("   [!] Invalid Byte!\n");
+        return;
+    }
+
+    printf(">> How many bits do you want to change? ");
+    scanf("%d", &totalChanges);
+
+    for (int i = 0; i < totalChanges; i++)
+    {
+        printf("\n   -- Change %d of %d --\n", i + 1, totalChanges);
+
+        printf("   Enter bit position (1-8): ");
+        scanf("%d", &bitPos);
+
+        if (bitPos < 1 || bitPos > 8)
+        {
+            printf("   [!] Invalid Position!\n");
+            i--;
+            continue;
+        }
+
+        int index = (targetByte - 1) * 8 + (bitPos - 1);
+
+        if (out[index] == '0')
+            out[index] = '1';
+        else
+            out[index] = '0';
+
+        printf("   [OK] Bit flipped successfully.\n");
+    }
+
+    printf("\nModified Data:\n");
+    printByte(out);
+}
+
+int main()
+{
+    char input[100];
+    char result[800] = "";
+    char seven[8];
+    char byte[9];
+
+    printf("===========================================\n");
+    printf("        EVEN PARITY CHECK SIMULATOR        \n");
+    printf("===========================================\n");
+
+    printf("\nEnter String : ");
+    scanf("%s", input);
+
+    for (int i = 0; input[i] != '\0'; i++)
+    {
+        toBinary7(input[i], seven);
+        addEvenParity(seven, byte);
+        strcat(result, byte);
+    }
+
+    printHeader("Transmitted Data");
+    printByte(result);
+
+    printHeader("Initial Parity Check");
+    parityCheck(result);
+
+    change(result);
+
+    printHeader("Final Parity Check");
+    parityCheck(result);
+
+
+    return 0;
+}
+

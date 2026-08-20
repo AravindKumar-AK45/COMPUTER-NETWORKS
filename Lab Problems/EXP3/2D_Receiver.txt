@@ -1,0 +1,137 @@
+2d_Receiver:
+#include <stdio.h>
+#include <stdlib.h>
+
+#define MAX_CHAR 128
+#define BITS 8
+
+char bits[MAX_CHAR][BITS];
+int rowParity[MAX_CHAR];
+int colParity[BITS];
+int cornerParity;
+int totalChars;
+
+int getParity(int count) {
+    if (count % 2 == 0) {
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
+void readFile() {
+    FILE *fp;
+    int i, j;
+
+    fp = fopen("transmitted.txt", "r");
+    if (fp == NULL) {
+        printf("Cannot open transmitted.txt\n");
+        exit(1);
+    }
+
+    fscanf(fp, "%d", &totalChars);
+
+    for (i = 0; i < totalChars; i++) {
+        for (j = 0; j < BITS; j++) {
+            fscanf(fp, " %c", &bits[i][j]);
+        }
+        fscanf(fp, "%d", &rowParity[i]);
+    }
+
+    for (j = 0; j < BITS; j++) {
+        fscanf(fp, "%d", &colParity[j]);
+    }
+    fscanf(fp, "%d", &cornerParity);
+
+    fclose(fp);
+}
+
+char getChar(int row) {
+    char ch;
+    int j;
+
+    ch = 0;
+    for (j = 0; j < BITS; j++) {
+        ch = ch * 2;
+        if (bits[row][j] == '1') {
+            ch = ch + 1;
+        }
+    }
+    return ch;
+}
+
+void checkParity() {
+    int i, j, count;
+    int errorRow, errorCol;
+    int rowOk, colOk;
+
+    errorRow = -1;
+    errorCol = -1;
+
+    printf("Receiver: checking the message...\n");
+
+    /* check each row */
+    for (i = 0; i < totalChars; i++) {
+        count = 0;
+        for (j = 0; j < BITS; j++) {
+            if (bits[i][j] == '1') {
+                count++;
+            }
+        }
+        rowOk = getParity(count);
+        if (rowOk != rowParity[i]) {
+            errorRow = i;
+            printf("Row %d does not match\n", i + 1);
+        }
+    }
+
+    /* check each column */
+    for (j = 0; j < BITS; j++) {
+        count = 0;
+        for (i = 0; i < totalChars; i++) {
+            if (bits[i][j] == '1') {
+                count++;
+            }
+        }
+        colOk = getParity(count);
+        if (colOk != colParity[j]) {
+            errorCol = j;
+            printf("Column %d does not match\n", j + 1);
+        }
+    }
+
+    if (errorRow != -1 && errorCol != -1) {
+        printf("\nError found at row %d column %d\n", errorRow + 1, errorCol + 1);
+
+        if (bits[errorRow][errorCol] == '1') {
+            bits[errorRow][errorCol] = '0';
+        } else {
+            bits[errorRow][errorCol] = '1';
+        }
+
+        printf("Bit fixed. Message is now correct.\n");
+    } else if (errorRow == -1 && errorCol == -1) {
+        printf("No error found. Message is correct.\n");
+    } else {
+        printf("Error found but it cannot be fixed.\n");
+    }
+}
+
+void showMessage() {
+    int i;
+
+    printf("\nFinal message: ");
+    for (i = 0; i < totalChars; i++) {
+        printf("%c", getChar(i));
+    }
+    printf("\n");
+}
+
+int main() {
+    readFile();
+    checkParity();
+    showMessage();
+
+    return 0;
+}
+

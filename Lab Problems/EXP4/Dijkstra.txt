@@ -1,0 +1,430 @@
+#include <stdio.h>
+
+#define MAX 20
+#define INF 9999
+
+/*
+   ---------------------------------------------------------
+   Dijkstra's Algorithm - Router Shortest Path Calculation
+
+   S       = set of routers already finalized (n[i].visited==1)
+   d(v)    = shortest cost found so far to router v (n[v].dist)
+   prev(v) = the router just before v on its shortest path
+             (n[v].parent)
+
+   Data structure used: simple array based MIN HEAP,
+   so picking the router with the smallest d(v) is fast.
+   ---------------------------------------------------------
+*/
+
+struct Node
+{
+    char name;
+    int dist;
+    int parent;
+    int visited;
+};
+
+struct Node n[MAX];
+int graph[MAX][MAX];
+
+/* ---------------- simple array based min heap ---------------- */
+
+int heapArr[MAX];
+int heapPos[MAX];
+int heapSize;
+
+void swapHeap(int i, int j)
+{
+    int temp;
+
+    temp = heapArr[i];
+    heapArr[i] = heapArr[j];
+    heapArr[j] = temp;
+
+    heapPos[heapArr[i]] = i;
+    heapPos[heapArr[j]] = j;
+}
+
+void heapifyDown(int i)
+{
+    int smallest, left, right;
+
+    while (1)
+    {
+        smallest = i;
+        left = 2 * i + 1;
+        right = 2 * i + 2;
+
+        if (left < heapSize && n[heapArr[left]].dist < n[heapArr[smallest]].dist)
+        {
+            smallest = left;
+        }
+        if (right < heapSize && n[heapArr[right]].dist < n[heapArr[smallest]].dist)
+        {
+            smallest = right;
+        }
+
+        if (smallest == i)
+        {
+            break;
+        }
+
+        swapHeap(i, smallest);
+        i = smallest;
+    }
+}
+
+void heapifyUp(int i)
+{
+    int parent;
+
+    while (i > 0)
+    {
+        parent = (i - 1) / 2;
+        if (n[heapArr[i]].dist < n[heapArr[parent]].dist)
+        {
+            swapHeap(i, parent);
+            i = parent;
+        }
+        else
+        {
+            break;
+        }
+    }
+}
+
+void buildHeap(int vertices)
+{
+    int i;
+
+    heapSize = vertices;
+    for (i = 0; i < vertices; i++)
+    {
+        heapArr[i] = i;
+        heapPos[i] = i;
+    }
+
+    for (i = vertices / 2 - 1; i >= 0; i--)
+    {
+        heapifyDown(i);
+    }
+}
+
+int extractMin()
+{
+    int minVertex;
+
+    if (heapSize == 0)
+    {
+        return -1;
+    }
+
+    minVertex = heapArr[0];
+
+    heapArr[0] = heapArr[heapSize - 1];
+    heapPos[heapArr[0]] = 0;
+    heapSize--;
+
+    heapifyDown(0);
+
+    return minVertex;
+}
+
+void decreaseKey(int vertex)
+{
+    int i;
+
+    i = heapPos[vertex];
+    heapifyUp(i);
+}
+
+/* ---------------- dijkstra logic ---------------- */
+
+void initialize(int vertices, int src)
+{
+    int i;
+
+    for (i = 0; i < vertices; i++)
+    {
+        n[i].dist = INF;
+        n[i].parent = -1;
+        n[i].visited = 0;
+    }
+    n[src].dist = 0;
+}
+
+void printStepBorder()
+{
+    printf("  +--------+--------+------------+\n");
+}
+
+void printCurrentTable(int vertices)
+{
+    int i;
+
+    printf("\n  Routing table after this step:\n");
+    printStepBorder();
+    printf("  | %-6s | %-6s | %-10s |\n", "Router", "Cost", "Came From");
+    printStepBorder();
+
+    for (i = 0; i < vertices; i++)
+    {
+        if (n[i].dist == INF)
+        {
+            printf("  | %-6c | %-6s | %-10s |\n", n[i].name, "INF", "-");
+        }
+        else if (n[i].parent == -1)
+        {
+            printf("  | %-6c | %-6d | %-10s |\n", n[i].name, n[i].dist, "START");
+        }
+        else
+        {
+            char from[2];
+            from[0] = n[n[i].parent].name;
+            from[1] = '\0';
+            printf("  | %-6c | %-6d | %-10s |\n", n[i].name, n[i].dist, from);
+        }
+    }
+    printStepBorder();
+}
+
+void dijkstra(int vertices, int src)
+{
+    int u, j, oldDist, newDist, stepCount;
+
+    initialize(vertices, src);
+    buildHeap(vertices);
+
+    printf("\n");
+    printf("############################################\n");
+    printf("   DIJKSTRA'S ALGORITHM - STEP BY STEP RUN\n");
+    printf("############################################\n");
+
+    stepCount = 0;
+
+    while (heapSize > 0)
+    {
+        u = extractMin();
+
+        if (n[u].dist == INF)
+        {
+            break;
+        }
+
+        n[u].visited = 1;
+        stepCount++;
+
+        printf("\n>> STEP %d: Visiting router '%c'  (locked-in cost = %d)\n",
+               stepCount, n[u].name, n[u].dist);
+
+        for (j = 0; j < vertices; j++)
+        {
+            if (graph[u][j] != 0 && n[j].visited == 0)
+            {
+                oldDist = n[j].dist;
+                newDist = n[u].dist + graph[u][j];
+
+                if (newDist < n[j].dist)
+                {
+                    n[j].dist = newDist;
+                    n[j].parent = u;
+                    decreaseKey(j);
+
+                    if (oldDist == INF)
+                    {
+                        printf("     - via edge %c-%c (weight %d): '%c' had no path yet, now set to %d\n",
+                               n[u].name, n[j].name, graph[u][j], n[j].name, newDist);
+                    }
+                    else
+                    {
+                        printf("     - via edge %c-%c (weight %d): found a cheaper path to '%c', %d -> %d\n",
+                               n[u].name, n[j].name, graph[u][j], n[j].name, oldDist, newDist);
+                    }
+                }
+            }
+        }
+
+        printCurrentTable(vertices);
+    }
+}
+
+char pathBuf[120];
+int pathLen;
+
+/* builds the path text into pathBuf instead of printing it straight away,
+   so later we can pad it and close the table box properly */
+void buildPath(int vertex)
+{
+    if (n[vertex].parent == -1)
+    {
+        pathBuf[pathLen] = n[vertex].name;
+        pathLen++;
+        return;
+    }
+
+    buildPath(n[vertex].parent);
+
+    pathBuf[pathLen] = ' ';
+    pathLen++;
+    pathBuf[pathLen] = '-';
+    pathLen++;
+    pathBuf[pathLen] = '>';
+    pathLen++;
+    pathBuf[pathLen] = ' ';
+    pathLen++;
+    pathBuf[pathLen] = n[vertex].name;
+    pathLen++;
+}
+
+/* walks backward from dest until it finds the router that comes
+   right after the source -- that router is the "first hop" */
+int getFirstHop(int dest, int src)
+{
+    int cur;
+
+    cur = dest;
+    while (n[cur].parent != src)
+    {
+        cur = n[cur].parent;
+    }
+    return cur;
+}
+
+void printFinalBorder(int pathWidth)
+{
+    int i;
+
+    printf("+--------+--------+------------+------------+");
+    for (i = 0; i < pathWidth + 2; i++)
+    {
+        printf("-");
+    }
+    printf("+\n");
+}
+
+void printFinalTable(int vertices, int src)
+{
+    int i, firstHop, pathWidth;
+
+    /* leave enough room in the Full Path column for the longest
+       possible path: each hop adds about 5 characters ("-> X") */
+    pathWidth = vertices * 5 + 3;
+    if (pathWidth < 12)
+    {
+        pathWidth = 12;
+    }
+
+    printf("\n");
+    printf("############################################\n");
+    printf("   FINAL RESULT  (source router = '%c')\n", n[src].name);
+    printf("############################################\n\n");
+
+    printFinalBorder(pathWidth);
+    printf("| %-6s | %-6s | %-10s | %-10s | %-*s |\n",
+           "Router", "Cost", "First Hop", "Direct Via", pathWidth, "Full Path");
+    printFinalBorder(pathWidth);
+
+    for (i = 0; i < vertices; i++)
+    {
+        if (n[i].dist == INF)
+        {
+            printf("| %-6c | %-6s | %-10s | %-10s | %-*s |\n",
+                   n[i].name, "INF", "-", "-", pathWidth, "not reachable");
+        }
+        else if (i == src)
+        {
+            pathLen = 0;
+            buildPath(i);
+            pathBuf[pathLen] = '\0';
+            printf("| %-6c | %-6d | %-10s | %-10s | %-*s |\n",
+                   n[i].name, 0, "-", "-", pathWidth, pathBuf);
+        }
+        else
+        {
+            firstHop = getFirstHop(i, src);
+
+            pathLen = 0;
+            buildPath(i);
+            pathBuf[pathLen] = '\0';
+
+            printf("| %-6c | %-6d | %-10c | %-10c | %-*s |\n",
+                   n[i].name, n[i].dist, n[firstHop].name, n[n[i].parent].name, pathWidth, pathBuf);
+        }
+    }
+    printFinalBorder(pathWidth);
+}
+
+int main()
+{
+    int vertices;
+    int i, j, src;
+
+    printf("############################################\n");
+    printf("     ROUTER SHORTEST PATH CALCULATOR\n");
+    printf("############################################\n\n");
+
+    printf("Enter number of routers: ");
+    scanf("%d", &vertices);
+
+    if (vertices > MAX)
+    {
+        printf("Max routers allowed is %d\n", MAX);
+        return 0;
+    }
+
+    printf("\n-- Enter router names --\n");
+    for (i = 0; i < vertices; i++)
+    {
+        printf("Name of router %d: ", i);
+        scanf(" %c", &n[i].name);
+    }
+
+    printf("\n-- Enter link costs between routers --\n");
+    printf("(same link both ways, diagonal is set to 0 automatically)\n\n");
+
+    for (i = 0; i < vertices; i++)
+    {
+        for (j = 0; j < vertices; j++)
+        {
+            if (i == j)
+            {
+                graph[i][j] = 0;
+                continue;
+            }
+
+            if (j < i)
+            {
+                /* already entered as i-j earlier, just copy it (undirected link) */
+                graph[i][j] = graph[j][i];
+                continue;
+            }
+
+            printf("Cost from %c to %c (0 = no direct link): ", n[i].name, n[j].name);
+            scanf("%d", &graph[i][j]);
+
+            if (graph[i][j] < 0)
+            {
+                printf("Negative cost is not allowed. Please enter a positive value.\n");
+                return 0;
+            }
+        }
+    }
+
+    printf("\n-- Choose source router --\n");
+    printf("Enter source router index (0 to %d): ", vertices - 1);
+    scanf("%d", &src);
+
+    if (src < 0 || src >= vertices)
+    {
+        printf("Invalid source router\n");
+        return 0;
+    }
+
+    dijkstra(vertices, src);
+    printFinalTable(vertices, src);
+
+    return 0;
+}
+
+

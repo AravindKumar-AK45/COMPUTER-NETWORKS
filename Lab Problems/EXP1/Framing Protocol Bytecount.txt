@@ -1,0 +1,637 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#define TABLE_SIZE 10
+#define MAX_BITS   6000
+#define FRAME_BUF  1024
+
+char urlTable[TABLE_SIZE][50];
+char ipTable[TABLE_SIZE][20];
+char macTable[TABLE_SIZE][20];
+int  used[TABLE_SIZE] = {0};
+
+/* ============================================================
+   EXP0 HELPER FUNCTIONS (unchanged from your original file)
+   ============================================================ */
+
+int hashFunction(char url[]) {
+    int sum = 0;
+    int i;
+    for (i = 0; url[i] != '\0'; i++) {
+        sum = sum + url[i];
+    }
+    return sum % TABLE_SIZE;
+}
+
+void insertURL(char url[], char ip[], char mac[]) {
+    int index = hashFunction(url);
+    int count = 0;
+
+    while (used[index] == 1 && count < TABLE_SIZE) {
+        if (strcmp(urlTable[index], url) == 0) {
+            return;
+        }
+        index = (index + 1) % TABLE_SIZE;
+        count++;
+    }
+
+    strcpy(urlTable[index], url);
+    strcpy(ipTable[index], ip);
+    strcpy(macTable[index], mac);
+    used[index] = 1;
+}
+
+int searchURL(char url[]) {
+    int index = hashFunction(url);
+    int count = 0;
+
+    while (count < TABLE_SIZE) {
+        if (used[index] == 1 && strcmp(urlTable[index], url) == 0) {
+            return index;
+        }
+        index = (index + 1) % TABLE_SIZE;
+        count++;
+    }
+    return -1;
+}
+
+void printTable() {
+    int i;
+    printf("---------------------------------------------------\n");
+    printf(" HASH TABLE (URL -> IP -> MAC)\n");
+    printf("---------------------------------------------------\n");
+    for (i = 0; i < TABLE_SIZE; i++) {
+        if (used[i] == 1) {
+            printf(" Slot %d : %-15s | %-15s | %s\n",
+                   i, urlTable[i], ipTable[i], macTable[i]);
+        }
+    }
+    printf("---------------------------------------------------\n\n");
+}
+
+void byteToBinary(int number, char result[]) {
+    int i;
+    for (i = 7; i >= 0; i--) {
+        if ((number >> i) & 1) {
+            result[7 - i] = '1';
+        } else {
+            result[7 - i] = '0';
+        }
+    }
+    result[8] = '\0';
+}
+
+/*int binaryToByte(char binStr[]) {
+    int val = 0;
+    for (int i = 0; i < 8; i++) {
+        val = (val << 1) | (binStr[i] - '0');
+    }
+    return val;
+}*/
+
+int binaryToByte(char binStr[]) {
+    int val = 0;
+    int i; // Declared outside the loop for older C compilers
+
+    for (i = 0; i < 8; i++) {
+        val = (val << 1) | (binStr[i] - '0');
+    }
+    return val;
+}
+
+
+
+void numberToBinary16(int number, char result[]) {
+    int i;
+    for (i = 15; i >= 0; i--) {
+        if ((number >> i) & 1) {
+            result[15 - i] = '1';
+        } else {
+            result[15 - i] = '0';
+        }
+    }
+    result[16] = '\0';
+}
+
+void ipToBinary32(char ip[], char result[]) {
+    int a, b, c, d;
+    char piece[9];
+    sscanf(ip, "%d.%d.%d.%d", &a, &b, &c, &d);
+
+    result[0] = '\0';
+    byteToBinary(a, piece); strcat(result, piece);
+    byteToBinary(b, piece); strcat(result, piece);
+    byteToBinary(c, piece); strcat(result, piece);
+    byteToBinary(d, piece); strcat(result, piece);
+}
+
+void macToBinary48(char mac[], char result[]) {
+    int b0, b1, b2, b3, b4, b5;
+    char piece[9];
+    sscanf(mac, "%x:%x:%x:%x:%x:%x", &b0, &b1, &b2, &b3, &b4, &b5);
+
+    result[0] = '\0';
+    byteToBinary(b0, piece); strcat(result, piece);
+    byteToBinary(b1, piece); strcat(result, piece);
+    byteToBinary(b2, piece); strcat(result, piece);
+    byteToBinary(b3, piece); strcat(result, piece);
+    byteToBinary(b4, piece); strcat(result, piece);
+    byteToBinary(b5, piece); strcat(result, piece);
+}
+
+void makeRandomIP(char ip[]) {
+    int a = 1 + rand() % 223;
+    int b = rand() % 256;
+    int c = rand() % 256;
+    int d = 1 + rand() % 254;
+    sprintf(ip, "%d.%d.%d.%d", a, b, c, d);
+}
+
+void makeRandomMAC(char mac[]) {
+    sprintf(mac, "%02X:%02X:%02X:%02X:%02X:%02X",
+            rand() % 256, rand() % 256, rand() % 256,
+            rand() % 256, rand() % 256, rand() % 256);
+}
+
+/* ============================================================
+   EXP1: BYTE COUNT FRAMING
+   Runs directly on the message handed off by the Data Link
+   layer above -- all in memory, no intermediate files.
+   ============================================================ */
+
+/*void byteCountSend(char *text, int size) {
+    int idx;
+    int totalSize;
+    unsigned char packet[FRAME_BUF];
+    FILE *fp;
+
+    printf("----- BYTE COUNT FRAMING : SENDER -----\n");
+    printf("Step 1: Data handed off from Data Link Layer\n");
+    printf("  Message        : \"%s\"\n", text);
+    printf("  Payload Length : %d bytes\n", size);
+    printf("  Hex            : ");
+    for (idx = 0; idx < size; idx++) printf("%02X ", (unsigned char)text[idx]);
+    printf("\n");
+
+    totalSize = size + 1;
+    printf("\nStep 2: Compute Count Byte\n");
+    printf("  count = payload_length + 1 = %d + 1 = %d (0x%02X)\n", size, totalSize, totalSize);
+
+    printf("\nStep 3: Assemble Frame\n");
+    packet[0] = (unsigned char)totalSize;
+    printf("  [Byte 0] Count field : 0x%02X (%d)\n", packet[0], packet[0]);
+    for (idx = 0; idx < size; idx++) packet[idx + 1] = (unsigned char)text[idx];
+    printf("  [Byte 1..%d] Payload : ", size);
+    for (idx = 1; idx <= size; idx++) printf("%02X ", packet[idx]);
+    printf("\n");
+
+    printf("\nStep 4: Final Framed Packet\n");
+    printf("  Frame Hex        : ");
+    for (idx = 0; idx < totalSize; idx++) printf("%02X ", packet[idx]);
+    printf("\n  Total frame size : %d bytes\n", totalSize);
+
+    printf("\nStep 5: Write Frame to Channel File\n");
+    fp = fopen("byte_count_channel.txt", "w");
+    if (!fp) {
+        printf("  ERROR: Cannot open 'byte_count_channel.txt' for*/
+
+void byteCountSend(char *text, int size) {
+    int idx;
+    int totalSize;
+    unsigned char packet[FRAME_BUF];
+    char binStr[9];
+    FILE *fp;
+
+    printf("----- BYTE COUNT FRAMING : SENDER -----\n");
+    printf("Step 1: Data handed off from Data Link Layer\n");
+    printf("  Message          : \"%s\"\n", text);
+    printf("  Payload Length   : %d bytes\n", size);
+    printf("  Binary           : ");
+    for (idx = 0; idx < size; idx++) {
+        byteToBinary((int)text[idx], binStr);
+        printf("%s ", binStr);
+    }
+    printf("\n");
+
+    totalSize = size + 1;
+    printf("\nStep 2: Compute Count Byte\n");
+    byteToBinary(totalSize, binStr);
+    printf("  count = payload_length + 1 = %d + 1 = %d (Binary: %s)\n", size, totalSize, binStr);
+
+    printf("\nStep 3: Assemble Frame\n");
+    packet[0] = (unsigned char)totalSize;
+    byteToBinary(packet[0], binStr);
+    printf("  [Byte 0] Count field : %s (%d)\n", binStr, packet[0]);
+
+    for (idx = 0; idx < size; idx++) packet[idx + 1] = (unsigned char)text[idx];
+    printf("  [Byte 1..%d] Payload : ", size);
+    for (idx = 1; idx <= size; idx++) {
+        byteToBinary(packet[idx], binStr);
+        printf("%s ", binStr);
+    }
+    printf("\n");
+
+    printf("\nStep 4: Final Framed Packet\n");
+    printf("  Frame Binary : ");
+    for (idx = 0; idx < totalSize; idx++) {
+        byteToBinary(packet[idx], binStr);
+        printf("%s ", binStr);
+    }
+    printf("\n  Total frame size : %d bytes\n", totalSize);
+
+    printf("\nStep 5: Write Frame to Channel File\n");
+    fp = fopen("byte_count_channel.txt", "w");
+    if (!fp) {
+        printf("  ERROR: Cannot open 'byte_count_channel.txt' for writing.\n\n");
+        return;
+    }
+    for (idx = 0; idx < totalSize; idx++) {
+        byteToBinary(packet[idx], binStr);
+        fprintf(fp, "%s ", binStr);
+    }
+    fprintf(fp, "\n");
+    fclose(fp);
+    printf("  Frame written to 'byte_count_channel.txt' in binary\n\n");
+}
+
+
+/*void byteCountReceive() {
+    int idx;
+    int rxCount;
+    int payloadLen;
+    int len = 0;
+    int hexVal;
+    unsigned char packet[FRAME_BUF];
+    char recovered[FRAME_BUF];
+    FILE *fp;
+
+    printf("----- BYTE COUNT FRAMING : RECEIVER -----\n");
+    printf("Step 1: Read Frame from Channel File\n");
+    fp = fopen("byte_count_channel.txt", "r");
+    if (!fp) {
+        printf("  ERROR: 'byte_count_channel.txt' not found.\n\n");
+        return;
+    }
+    while (len < FRAME_BUF && fscanf(fp, "%x", &hexVal) == 1)
+        packet[len++] = (unsigned char)hexVal;
+    fclose(fp);
+
+    printf("  Total bytes : %d\n", len);
+    printf("  Hex dump    : ");
+    for (idx = 0; idx < len; idx++) printf("%02X ", packet[idx]);
+    printf("\n");
+
+    rxCount = packet[0];
+    payloadLen = rxCount - 1;
+    printf("\nStep 2: Extract Count Byte\n");
+    printf("  Byte[0] = 0x%02X => Expected frame size: %d bytes\n", rxCount, rxCount);
+    printf("  Expected payload: %d - 1 = %d bytes\n", rxCount, payloadLen);
+    if (len < rxCount)
+        printf("  WARNING: Received %d bytes but count says %d!\n", len, rxCount);
+    else
+        printf("  Validation: OK (received %d >= expected %d)\n", len, rxCount);
+
+    printf("\nStep 3: Extract Payload (Bytes 1 to %d)\n", payloadLen);
+    printf("  Payload hex: ");
+    for (idx = 1; idx <= payloadLen; idx++) printf("%02X ", packet[idx]);
+    printf("\n  Payload chr: ");
+    for (idx = 1; idx <= payloadLen; idx++) printf(" %c ", packet[idx]);
+    printf("\n");
+
+    for (idx = 0; idx < payloadLen; idx++) recovered[idx] = packet[idx + 1];
+    recovered[payloadLen] = '\0';
+
+    printf("\nStep 4: Deframing Complete\n");
+    printf("  Recovered Message: \"%s\"\n", recovered);
+    printf("  Message Length   : %d characters\n\n", payloadLen);
+}*/
+
+/* ============================================================
+   MAIN: EXP0 layers, then EXP1 framing inserted right after
+   the Data Link Layer's full stream is built.
+   ============================================================ */
+void byteCountReceive() {
+    int idx;
+    int rxCount;
+    int payloadLen;
+    int len = 0;
+    char binStr[9];
+    unsigned char packet[FRAME_BUF];
+    char recovered[FRAME_BUF];
+    FILE *fp;
+
+    printf("----- BYTE COUNT FRAMING : RECEIVER -----\n");
+    printf("Step 1: Read Frame from Channel File\n");
+    fp = fopen("byte_count_channel.txt", "r");
+    if (!fp) {
+        printf("  ERROR: 'byte_count_channel.txt' not found.\n\n");
+        return;
+    }
+
+    // Read 8-character binary strings sequentially
+    while (len < FRAME_BUF && fscanf(fp, "%8s", binStr) == 1) {
+        packet[len++] = (unsigned char)binaryToByte(binStr);
+    }
+    fclose(fp);
+
+    printf("  Total bytes : %d\n", len);
+    printf("  Binary dump : ");
+    for (idx = 0; idx < len; idx++) {
+        byteToBinary(packet[idx], binStr);
+        printf("%s ", binStr);
+    }
+    printf("\n");
+
+    rxCount = packet[0];
+    payloadLen = rxCount - 1;
+
+    printf("\nStep 2: Extract Count Byte\n");
+    byteToBinary(rxCount, binStr);
+    printf("  Byte[0] = %s => Expected frame size: %d bytes\n", binStr, rxCount);
+    printf("  Expected payload: %d - 1 = %d bytes\n", rxCount, payloadLen);
+
+    if (len < rxCount)
+        printf("  WARNING: Received %d bytes but count says %d!\n", len, rxCount);
+    else
+        printf("  Validation: OK (received %d >= expected %d)\n", len, rxCount);
+
+    printf("\nStep 3: Extract Payload (Bytes 1 to %d)\n", payloadLen);
+    printf("  Payload bin: ");
+    for (idx = 1; idx <= payloadLen; idx++) {
+        byteToBinary(packet[idx], binStr);
+        printf("%s ", binStr);
+    }
+    printf("\n  Payload chr: ");
+    for (idx = 1; idx <= payloadLen; idx++) printf(" %c ", packet[idx]);
+    printf("\n");
+
+    for (idx = 0; idx < payloadLen; idx++) recovered[idx] = packet[idx + 1];
+    recovered[payloadLen] = '\0';
+
+    printf("\nStep 4: Deframing Complete\n");
+    printf("  Recovered Message: \"%s\"\n", recovered);
+    printf("  Message Length   : %d characters\n\n", payloadLen);
+}
+
+
+int main() {
+    char srcUrl[50], dstUrl[50];
+    int srcIndex, dstIndex;
+    char srcIP[20], dstIP[20], srcMAC[20], dstMAC[20];
+    char srcIPBin[40], dstIPBin[40], srcMACBin[60], dstMACBin[60];
+    char fileName[100];
+    FILE *readFile;
+    char message[500];
+    int msgLength = 0;
+    int c;
+    char bits[MAX_BITS];
+    int i;
+    int totalBits;
+    int srcPort, dstPort;
+    char srcPortBin[17], dstPortBin[17];
+    char transportStream[MAX_BITS];
+    int transportTotalBits;
+    char networkStream[MAX_BITS];
+    int networkTotalBits;
+    int packetSize;
+    int numPackets;
+    char packets[200][17];
+    int p, b, pos, k;
+    char trailer[9];
+    char dataLinkStream[MAX_BITS];
+    int dataLinkTotalBits;
+    int frameSize;
+    int framesPerPacket;
+    int totalFrames;
+    int frameNumber;
+    char frameData[9];
+    int start;
+
+    srand(time(NULL));
+
+    printf("=====================================================\n");
+    printf("     SIMPLE 4-LAYER NETWORK SIMULATOR (in binary)\n");
+    printf("=====================================================\n\n");
+
+    insertURL("google.com",    "142.250.193.14",  "3C:5A:B4:1D:9F:02");
+    insertURL("youtube.com",   "142.250.72.14",   "A4:5E:60:D3:2B:19");
+    insertURL("facebook.com",  "157.240.22.35",   "F0:2F:74:6B:88:11");
+    insertURL("amazon.com",    "205.251.242.103", "B8:27:EB:9A:3C:44");
+    insertURL("wikipedia.org", "208.80.154.224",  "00:1A:2B:3C:4D:5E");
+
+    printTable();
+
+    printf("Enter SOURCE URL (example: google.com): ");
+    scanf("%s", srcUrl);
+    printf("Enter DESTINATION URL (example: youtube.com): ");
+    scanf("%s", dstUrl);
+    getchar();
+
+    srcIndex = searchURL(srcUrl);
+    if (srcIndex == -1) {
+        char newIp[20], newMac[20];
+        makeRandomIP(newIp);
+        makeRandomMAC(newMac);
+        insertURL(srcUrl, newIp, newMac);
+        srcIndex = searchURL(srcUrl);
+        printf("\n(\"%s\" was not in the table, so a new IP/MAC was created)\n", srcUrl);
+    }
+
+    dstIndex = searchURL(dstUrl);
+    if (dstIndex == -1) {
+        char newIp[20], newMac[20];
+        makeRandomIP(newIp);
+        makeRandomMAC(newMac);
+        insertURL(dstUrl, newIp, newMac);
+        dstIndex = searchURL(dstUrl);
+        printf("\n(\"%s\" was not in the table, so a new IP/MAC was created)\n", dstUrl);
+    }
+
+    strcpy(srcIP,  ipTable[srcIndex]);
+    strcpy(dstIP,  ipTable[dstIndex]);
+    strcpy(srcMAC, macTable[srcIndex]);
+    strcpy(dstMAC, macTable[dstIndex]);
+
+    ipToBinary32(srcIP, srcIPBin);
+    ipToBinary32(dstIP, dstIPBin);
+    macToBinary48(srcMAC, srcMACBin);
+    macToBinary48(dstMAC, dstMACBin);
+
+    printf("\n----------------- ADDRESS RESOLUTION -----------------\n");
+    printf("SOURCE      : %s -> IP %s -> MAC %s\n", srcUrl, srcIP, srcMAC);
+    printf("   IP  binary  (32 bits): %s\n", srcIPBin);
+    printf("   MAC binary  (48 bits): %s\n", srcMACBin);
+    printf("DESTINATION : %s -> IP %s -> MAC %s\n", dstUrl, dstIP, dstMAC);
+    printf("   IP  binary  (32 bits): %s\n", dstIPBin);
+    printf("   MAC binary  (48 bits): %s\n", dstMACBin);
+    printf("-------------------------------------------------------\n\n");
+
+    printf("Enter the file name that contains the message (example: message.txt): ");
+    scanf("%s", fileName);
+    getchar();
+
+    readFile = fopen(fileName, "r");
+    if (readFile == NULL) {
+        printf("ERROR: could not open %s (make sure the file already exists)\n", fileName);
+        return 1;
+    }
+
+    while ((c = fgetc(readFile)) != EOF && msgLength < 499) {
+        if (c == '\n' || c == '\r') continue;
+        message[msgLength] = (char) c;
+        msgLength++;
+    }
+    message[msgLength] = '\0';
+    fclose(readFile);
+
+    printf("=============== APPLICATION LAYER ===============\n");
+    printf("Message read from %s: \"%s\"\n\n", fileName, message);
+
+    bits[0] = '\0';
+    for (i = 0; i < msgLength; i++) {
+        char oneByte[9];
+        byteToBinary((int)(unsigned char)message[i], oneByte);
+        strcat(bits, oneByte);
+        printf("  '%c'  ->  %s\n", message[i], oneByte);
+    }
+    totalBits = msgLength * 8;
+
+    printf("\nStream      : %s\n", bits);
+    printf("Total Bits  : %d bits\n", totalBits);
+    printf("===================================================\n\n");
+
+    srcPort = 1024 + rand() % (65535 - 1024 + 1);
+    dstPort = 1024 + rand() % (65535 - 1024 + 1);
+    numberToBinary16(srcPort, srcPortBin);
+    numberToBinary16(dstPort, dstPortBin);
+
+    sprintf(transportStream, "%s%s%s", srcPortBin, dstPortBin, bits);
+    transportTotalBits = 16 + 16 + totalBits;
+
+    printf("=============== TRANSPORT LAYER ===============\n");
+    printf("Source Port      : %d  (binary: %s)\n", srcPort, srcPortBin);
+    printf("Destination Port : %d  (binary: %s)\n", dstPort, dstPortBin);
+    printf("Stream           : %s\n", transportStream);
+    printf("Total Bits       : %d bits\n", transportTotalBits);
+    printf("=================================================\n\n");
+
+    sprintf(networkStream, "%s%s%s", srcIPBin, dstIPBin, bits);
+    networkTotalBits = 32 + 32 + totalBits;
+
+    printf("=============== NETWORK LAYER ===============\n");
+    printf("Source IP        : %s\n", srcIPBin);
+    printf("Destination IP   : %s\n", dstIPBin);
+    printf("Stream           : %s\n", networkStream);
+    printf("Total Bits       : %d bits\n\n", networkTotalBits);
+
+    packetSize = 16;
+    numPackets = totalBits / packetSize;
+    if (totalBits % packetSize != 0) {
+        numPackets++;
+    }
+
+    printf("Total packets: %d\n", numPackets);
+
+    for (p = 0; p < numPackets; p++) {
+        start = p * packetSize;
+        for (b = 0; b < packetSize; b++) {
+            pos = start + b;
+            if (pos < totalBits) {
+                packets[p][b] = bits[pos];
+            } else {
+                packets[p][b] = '0';
+            }
+        }
+        packets[p][packetSize] = '\0';
+    }
+    printf("===============================================\n\n");
+
+    strcpy(trailer, "00000000");
+
+    sprintf(dataLinkStream, "%s%s%s%s", srcMACBin, dstMACBin, networkStream, trailer);
+    dataLinkTotalBits = 48 + 48 + networkTotalBits + 8;
+
+    printf("=============== DATA LINK LAYER ===============\n");
+    printf("Source MAC       : %s\n", srcMACBin);
+    printf("Destination MAC  : %s\n", dstMACBin);
+    printf("Stream           : %s\n", dataLinkStream);
+    printf("Total Bits       : %d bits\n\n", dataLinkTotalBits);
+
+    printf("Data             : %s\n", bits);
+    printf("Src Port         : %s\n", srcPortBin);
+    printf("Dest Port        : %s\n", dstPortBin);
+    printf("Src IP           : %s\n", srcIPBin);
+    printf("Dest IP          : %s\n", dstIPBin);
+    printf("Src MAC          : %s\n", srcMACBin);
+    printf("Dest MAC         : %s\n", dstMACBin);
+    printf("Trailer          : %s\n", trailer);
+    printf("Full Stream      : %s%s%s%s%s%s%s%s\n\n",
+           bits, srcPortBin, dstPortBin, srcIPBin, dstIPBin, srcMACBin, dstMACBin, trailer);
+
+    /* ========================================================
+       EXP1 STARTS HERE: the Data Link layer has the full
+       stream above. Before it gets chopped into raw frames,
+       hand the ORIGINAL MESSAGE directly to the Byte Count
+       framing protocol.
+       ======================================================== */
+    printf("=========================================================\n");
+    printf("   EXP1: DATA LINK FRAMING (Byte Count Protocol)\n");
+    printf("=========================================================\n");
+    printf("The message above is now framed for real, using the\n");
+    printf("Byte Count framing technique of the Data Link Layer.\n\n");
+
+    byteCountSend(message, msgLength);
+    byteCountReceive();
+
+    printf("=========================================================\n\n");
+    /* ======================== EXP1 ENDS ======================== */
+
+    frameSize = 8;
+    framesPerPacket = packetSize / frameSize;
+    totalFrames = numPackets * framesPerPacket;
+
+    printf("Total frames: %d\n\n", totalFrames);
+
+    printf("====Each frame and its content======\n\n");
+
+    for (p = 0; p < numPackets; p++) {
+        for (frameNumber = 1; frameNumber <= framesPerPacket; frameNumber++) {
+            start = (frameNumber - 1) * frameSize;
+            for (k = 0; k < frameSize; k++) {
+                frameData[k] = packets[p][start + k];
+            }
+            frameData[frameSize] = '\0';
+
+            printf("---------------------------------------------\n");
+            printf("Packet No : %d\n", p + 1);
+            printf("Frame No  : %d\n", frameNumber);
+            printf("Source Port      : %s\n", srcPortBin);
+            printf("Destination Port : %s\n\n", dstPortBin);
+            printf("Source IP        : %s\n", srcIPBin);
+            printf("Destination IP   : %s\n", dstIPBin);
+            printf("Source MAC       : %s\n", srcMACBin);
+            printf("Destination MAC  : %s\n", dstMACBin);
+            printf("Frame Data       : %s\n", frameData);
+            printf("Trailer          : %s\n", trailer);
+
+            printf("Frame Stream     : %s%s%s%s\n", trailer, srcMACBin, dstMACBin, frameData);
+        }
+    }
+    printf("---------------------------------------------\n\n");
+
+    printf("=============== SUMMARY ===============\n");
+    printf("Message              : \"%s\"\n", message);
+    printf("Application bits     : %d\n", totalBits);
+    printf("Transport layer bits : %d\n", transportTotalBits);
+    printf("Network layer bits   : %d\n", networkTotalBits);
+    printf("Data Link layer bits : %d\n", dataLinkTotalBits);
+    printf("Total packets        : %d\n", numPackets);
+    printf("Total frames         : %d\n", totalFrames);
+    printf("=========================================\n");
+
+    return 0;
+}
+
+

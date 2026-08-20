@@ -1,0 +1,1158 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#define TABLE_SIZE 10
+#define MAX_BITS   6000
+#define FRAME_BUF  1024
+
+/* BISYNC control bytes (Exp1 framing + Exp2 CRC-4/Parity) */
+#define SYN 0x16
+#define SOH 0x01
+#define STX 0x02
+#define ETX 0x03
+#define DLE 0x10
+#define FRAME_BUF2 10000
+
+char urlTable[TABLE_SIZE][50];
+char ipTable[TABLE_SIZE][20];
+char macTable[TABLE_SIZE][20];
+int  used[TABLE_SIZE] = {0};
+
+/* ============================================================
+   EXP0 HELPER FUNCTIONS (unchanged from your original file)
+   ============================================================ */
+
+int hashFunction(char url[]) {
+    int sum = 0;
+    int i;
+    for (i = 0; url[i] != '\0'; i++) {
+        sum = sum + url[i];
+    }
+    return sum % TABLE_SIZE;
+}
+
+void insertURL(char url[], char ip[], char mac[]) {
+    int index = hashFunction(url);
+    int count = 0;
+
+    while (used[index] == 1 && count < TABLE_SIZE) {
+        if (strcmp(urlTable[index], url) == 0) {
+            return;
+        }
+        index = (index + 1) % TABLE_SIZE;
+        count++;
+    }
+
+    strcpy(urlTable[index], url);
+    strcpy(ipTable[index], ip);
+    strcpy(macTable[index], mac);
+    used[index] = 1;
+}
+
+int searchURL(char url[]) {
+    int index = hashFunction(url);
+    int count = 0;
+
+    while (count < TABLE_SIZE) {
+        if (used[index] == 1 && strcmp(urlTable[index], url) == 0) {
+            return index;
+        }
+        index = (index + 1) % TABLE_SIZE;
+        count++;
+    }
+    return -1;
+}
+
+void printTable() {
+    int i;
+    printf("---------------------------------------------------\n");
+    printf(" HASH TABLE (URL -> IP -> MAC)\n");
+    printf("---------------------------------------------------\n");
+    for (i = 0; i < TABLE_SIZE; i++) {
+        if (used[i] == 1) {
+            printf(" Slot %d : %-15s | %-15s | %s\n",
+                   i, urlTable[i], ipTable[i], macTable[i]);
+        }
+    }
+    printf("---------------------------------------------------\n\n");
+}
+
+void byteToBinary(int number, char result[]) {
+    int i;
+    for (i = 7; i >= 0; i--) {
+        if ((number >> i) & 1) {
+            result[7 - i] = '1';
+        } else {
+            result[7 - i] = '0';
+        }
+    }
+    result[8] = '\0';
+}
+
+void numberToBinary16(int number, char result[]) {
+    int i;
+    for (i = 15; i >= 0; i--) {
+        if ((number >> i) & 1) {
+            result[15 - i] = '1';
+        } else {
+            result[15 - i] = '0';
+        }
+    }
+    result[16] = '\0';
+}
+
+void ipToBinary32(char ip[], char result[]) {
+    int a, b, c, d;
+    char piece[9];
+    sscanf(ip, "%d.%d.%d.%d", &a, &b, &c, &d);
+
+    result[0] = '\0';
+    byteToBinary(a, piece); strcat(result, piece);
+    byteToBinary(b, piece); strcat(result, piece);
+    byteToBinary(c, piece); strcat(result, piece);
+    byteToBinary(d, piece); strcat(result, piece);
+}
+
+void macToBinary48(char mac[], char result[]) {
+    int b0, b1, b2, b3, b4, b5;
+    char piece[9];
+    sscanf(mac, "%x:%x:%x:%x:%x:%x", &b0, &b1, &b2, &b3, &b4, &b5);
+
+    result[0] = '\0';
+    byteToBinary(b0, piece); strcat(result, piece);
+    byteToBinary(b1, piece); strcat(result, piece);
+    byteToBinary(b2, piece); strcat(result, piece);
+    byteToBinary(b3, piece); strcat(result, piece);
+    byteToBinary(b4, piece); strcat(result, piece);
+    byteToBinary(b5, piece); strcat(result, piece);
+}
+
+void makeRandomIP(char ip[]) {
+    int a = 1 + rand() % 223;
+    int b = rand() % 256;
+    int c = rand() % 256;
+    int d = 1 + rand() % 254;
+    sprintf(ip, "%d.%d.%d.%d", a, b, c, d);
+}
+
+void makeRandomMAC(char mac[]) {
+    sprintf(mac, "%02X:%02X:%02X:%02X:%02X:%02X",
+            rand() % 256, rand() % 256, rand() % 256,
+            rand() % 256, rand() % 256, rand() % 256);
+}
+
+/* ============================================================
+/* ============================================================
+   MAIN: EXP0 layers, then EXP1 framing inserted right after
+   the Data Link Layer's full stream is built.
+   ============================================================ */
+
+/* ============================================================
+   EXP1 + EXP2: BISYNC FRAMING WITH USER-DEFINED CRC POLYNOMIAL
+   & EVEN PARITY. Ported/extended from send.c / rec.c.
+   C89-safe: loop variables declared at the top of functions.
+   ============================================================ */
+
+/* ============================================================
+   MAIN: EXP0 layers, then EXP1 framing inserted right after
+   the Data Link Layer's full stream is built.
+   ============================================================ */
+
+/* ============================================================
+   EXP1 + EXP2: BISYNC FRAMING WITH USER-DEFINED CRC POLYNOMIAL
+   & EVEN PARITY. Faithfully ported from send-1.c / rec-1.c
+   (degree+coefficient polynomial input, fixed 8-bit trailer,
+   divisor stored in the channel file, error classification).
+   C89-safe: loop variables declared at the top of functions.
+   Multi-bit error simulation retained from the earlier version.
+   ============================================================ */
+
+/* ---- Build the algebraic polynomial string, e.g. "x^4 + x + 1" ---- */
+void buildPolynomialString(const char *divisor, int degree, char *polyStr) {
+    int first;
+    int i, power;
+    char term[20];
+
+    polyStr[0] = '\0';
+    first = 1;
+
+    for (i = 0; i <= degree; i++) {
+        power = degree - i;
+        if (divisor[i] == '1') {
+            if (!first) strcat(polyStr, " + ");
+            first = 0;
+
+            if (power == 0) {
+                strcat(polyStr, "1");
+            } else if (power == 1) {
+                strcat(polyStr, "x");
+            } else {
+                sprintf(term, "x^%d", power);
+                strcat(polyStr, term);
+            }
+        }
+    }
+    if (first) strcpy(polyStr, "0");
+}
+
+/* ---- Modulo-2 polynomial division (identical logic to send-1.c/rec-1.c):
+        augment data with crcLen zero bits; for each data bit, if it is
+        '1' the multiplier is 1 (XOR the divisor-width window with the
+        divisor); if it is '0' the multiplier is 0 (no change); the
+        remaining crcLen bits at the end are the CRC remainder. ---- */
+void calculateCRCBinary(const char *binaryData, const char *divisor, char *crcOut) {
+    int dataLen;
+    int divLen;
+    int crcLen;
+    char temp[FRAME_BUF2];
+    int i, j;
+
+    dataLen = strlen(binaryData);
+    divLen = strlen(divisor);
+    crcLen = divLen - 1;
+
+    strcpy(temp, binaryData);
+    for (i = 0; i < crcLen; i++) strcat(temp, "0");
+
+    printf("\n  --- Step-by-Step CRC Long Division ---\n");
+    printf("  Augmented Binary Stream : %s\n", temp);
+    printf("  Divisor Binary Bitstring: %s\n", divisor);
+
+    for (i = 0; i < dataLen; i++) {
+        if (temp[i] == '1') {
+            for (j = 0; j < divLen; j++) {
+                temp[i + j] = (temp[i + j] == divisor[j]) ? '0' : '1';
+            }
+        }
+    }
+
+    strncpy(crcOut, &temp[dataLen], crcLen);
+    crcOut[crcLen] = '\0';
+
+    printf("  Calculated CRC Remainder : %s (%d bits)\n", crcOut, crcLen);
+}
+
+/* ---- RECEIVER-SIDE CHECK: divide the FULL received codeword
+        (payload bits + received CRC bits appended, NO extra zero
+        padding this time - the CRC bits already occupy that role)
+        by the same divisor. If the codeword is error-free, this
+        division must leave an all-zero remainder - that is the
+        literal, textbook CRC check. ---- */
+void verifyCRCRemainder(const char *payloadBin, const char *receivedCRC, const char *divisor, char *remainderOut) {
+    char codeword[FRAME_BUF2];
+    int checkLen;
+    int divLen;
+    int crcLen;
+    char temp[FRAME_BUF2];
+    int i, j;
+
+    divLen = strlen(divisor);
+    crcLen = divLen - 1;
+
+    strcpy(codeword, payloadBin);
+    strcat(codeword, receivedCRC);
+    checkLen = strlen(codeword) - crcLen;   /* = length of payloadBin */
+
+    strcpy(temp, codeword);
+
+    printf("\n  --- Receiver Check: Divide FULL Codeword (Payload + Received CRC) ---\n");
+    printf("  Received Codeword (payload+CRC, no extra padding): %s\n", codeword);
+    printf("  Divisor Binary Bitstring                          : %s\n", divisor);
+
+    for (i = 0; i < checkLen; i++) {
+        if (temp[i] == '1') {
+            for (j = 0; j < divLen; j++) {
+                temp[i + j] = (temp[i + j] == divisor[j]) ? '0' : '1';
+            }
+        }
+    }
+
+    strncpy(remainderOut, &temp[checkLen], crcLen);
+    remainderOut[crcLen] = '\0';
+
+    printf("  Receiver Remainder (must be all 0s if no error)   : %s\n", remainderOut);
+}
+
+/* ---- Even parity: '0' if count of 1-bits is even, else '1' ---- */
+char calculateEvenParityBinary(const char *binaryData) {
+    int onesCount = 0;
+    int i;
+    for (i = 0; binaryData[i] != '\0'; i++) {
+        if (binaryData[i] == '1') onesCount++;
+    }
+    return (onesCount % 2 == 0) ? '0' : '1';
+}
+
+/* ---- Character stuffing: escape literal "ETX"/"DLE"/"STX" text ---- */
+int performCharacterStuffing(const char input[], char output[]) {
+    int inputIndex = 0, outputIndex = 0;
+    printf("\n  --- Starting Character Stuffing ---\n");
+    while (input[inputIndex] != '\0') {
+        if (strncmp(&input[inputIndex], "ETX", 3) == 0) {
+            printf("  Found text 'ETX' -> Stuffed 0x%02X 0x%02X\n", DLE, ETX);
+            output[outputIndex++] = DLE;
+            output[outputIndex++] = ETX;
+            inputIndex += 3;
+        } else if (strncmp(&input[inputIndex], "DLE", 3) == 0) {
+            printf("  Found text 'DLE' -> Stuffed 0x%02X 0x%02X\n", DLE, DLE);
+            output[outputIndex++] = DLE;
+            output[outputIndex++] = DLE;
+            inputIndex += 3;
+        } else if (strncmp(&input[inputIndex], "STX", 3) == 0) {
+            printf("  Found text 'STX' -> Stuffed 0x%02X 0x%02X\n", DLE, STX);
+            output[outputIndex++] = DLE;
+            output[outputIndex++] = STX;
+            inputIndex += 3;
+        } else {
+            output[outputIndex++] = input[inputIndex++];
+        }
+    }
+    printf("  --- Stuffing complete! ---\n");
+    return outputIndex;
+}
+
+/* ---- Convert a raw byte buffer into a pure binary bitstring ---- */
+void byteBufferToBinaryString(const char *bytes, int len, char *binStrOut) {
+    char temp[9];
+    int i;
+    binStrOut[0] = '\0';
+    for (i = 0; i < len; i++) {
+        byteToBinary((unsigned char)bytes[i], temp);
+        strcat(binStrOut, temp);
+    }
+}
+
+/* ---- Assemble full binary BISYNC frame with a FIXED 8-bit trailer:
+        [ParityBit][Zero Padding][CRC Bits], always 1 byte, degree 1-7 ---- */
+void buildBisyncFrameBinary(const char stuffedBodyBin[], const char divisor[], char frameBinOut[]) {
+    char synBin[9], sohBin[9], stxBin[9], etxBin[9];
+    char hBin[9], dBin[9], rBin[9];
+    int degree;
+    char crcBits[32];
+    char parityBit;
+    char trailerBin[9];
+    int padZeros;
+    int i;
+
+    byteToBinary(SYN, synBin);
+    byteToBinary(SOH, sohBin);
+    byteToBinary(STX, stxBin);
+    byteToBinary(ETX, etxBin);
+    byteToBinary('H', hBin);
+    byteToBinary('D', dBin);
+    byteToBinary('R', rBin);
+
+    frameBinOut[0] = '\0';
+    strcat(frameBinOut, synBin);
+    strcat(frameBinOut, synBin);
+    strcat(frameBinOut, sohBin);
+    strcat(frameBinOut, hBin);
+    strcat(frameBinOut, dBin);
+    strcat(frameBinOut, rBin);
+    strcat(frameBinOut, stxBin);
+    strcat(frameBinOut, stuffedBodyBin);
+    strcat(frameBinOut, etxBin);
+
+    degree = strlen(divisor) - 1;
+    calculateCRCBinary(stuffedBodyBin, divisor, crcBits);
+    parityBit = calculateEvenParityBinary(stuffedBodyBin);
+
+    trailerBin[0] = parityBit;
+    padZeros = 8 - 1 - degree;
+    for (i = 1; i <= padZeros; i++) {
+        trailerBin[i] = '0';
+    }
+    strncpy(&trailerBin[1 + padZeros], crcBits, degree);
+    trailerBin[8] = '\0';
+
+    strcat(frameBinOut, trailerBin);
+
+    printf("\n  >>> BINARY CHECKSUM GENERATION <<<\n");
+    printf("    Binary Payload Length  : %d bits\n", (int)strlen(stuffedBodyBin));
+    printf("    Calculated Parity Bit  : %c (Even Parity)\n", parityBit);
+    printf("    Calculated CRC Bits    : %s\n", crcBits);
+    printf("    Trailer Byte  : %s\n", trailerBin);
+}
+
+/* ---- Save divisor (line 1) + full frame (line 2) to the channel file ---- */
+void saveBinaryFrameToFile(const char filename[], const char divisor[], const char binaryFrame[]) {
+    FILE *fp = fopen(filename, "w");
+    if (fp == NULL) {
+        printf("  Error: Could not save binary frame file!\n");
+        return;
+    }
+    fprintf(fp, "%s\n%s\n", divisor, binaryFrame);
+    fclose(fp);
+}
+
+/* ---- SENDER: degree/coefficient polynomial entry, stuff, frame,
+        checksum, optional multi-bit error simulation, write to file ---- */
+void bisyncCrcSend(char *message, int msgLen) {
+    int degree;
+    int coeff;
+    char divisor[32];
+    char polyFormula[100];
+    char stuffedBody[2000];
+    int stuffedLen;
+    char stuffedBodyBin[FRAME_BUF2];
+    char fullBinaryFrame[FRAME_BUF2];
+    char errorChoice[10];
+    int numErrors;
+    int bitPos;
+    int frameLen;
+    char originalBit;
+    int i;
+
+    printf("----- BISYNC + CRC FRAMING : SENDER -----\n");
+    printf("Step 1: Data handed off from Data Link Layer\n");
+    printf("  Message : \"%s\"\n", message);
+    printf("  Length  : %d bytes\n", msgLen);
+
+    printf("\nStep 2: Dynamic CRC Polynomial Configuration\n");
+    printf("--------------------------------------------------------\n");
+    printf("         DYNAMIC CRC POLYNOMIAL CONFIGURATION           \n");
+    printf("--------------------------------------------------------\n");
+    printf("Enter highest degree of polynomial (1 to 7): ");
+    scanf("%d", &degree);
+
+    if (degree < 1 || degree > 7) {
+        printf("Error: Polynomial degree must be between 1 and 7.\n");
+        return;
+    }
+
+    printf("Enter coefficient for x^%d (must be 1): ", degree);
+    scanf("%d", &coeff);
+    divisor[0] = '1';
+
+    for (i = degree - 1; i >= 0; i--) {
+        printf("Enter coefficient for x^%d (0 or 1): ", i);
+        scanf("%d", &coeff);
+        divisor[degree - i] = (coeff == 1) ? '1' : '0';
+    }
+    divisor[degree + 1] = '\0';
+
+    buildPolynomialString(divisor, degree, polyFormula);
+    printf("\n  Polynomial Expression    : G(x) = %s\n", polyFormula);
+    printf("  Divisor Binary Bitstring : %s\n", divisor);
+
+    printf("\nStep 3: Character Stuffing (escape literal ETX/DLE/STX text)\n");
+    stuffedLen = performCharacterStuffing(message, stuffedBody);
+
+    printf("\nStep 4: Convert Stuffed Payload to Pure Binary\n");
+    byteBufferToBinaryString(stuffedBody, stuffedLen, stuffedBodyBin);
+    printf("  Stuffed Payload Binary: %s\n", stuffedBodyBin);
+
+    printf("\nStep 5: Assemble Full BISYNC Frame (SYN SYN SOH H D R STX...ETX+Trailer)\n");
+    buildBisyncFrameBinary(stuffedBodyBin, divisor, fullBinaryFrame);
+
+    printf("\nStep 6: Clean Frame Before Transmission\n");
+    printf("  %s\n", fullBinaryFrame);
+    frameLen = strlen(fullBinaryFrame);
+
+    printf("\nStep 7: Simulate Transmission Channel (optional error injection)\n");
+    printf("  Do you want to simulate a transmission error? (y/n): ");
+    scanf("%s", errorChoice);
+
+    if (errorChoice[0] == 'y' || errorChoice[0] == 'Y') {
+        printf("  How many bit(s) do you want to corrupt? ");
+        scanf("%d", &numErrors);
+
+        if (numErrors < 1) {
+            printf("  Invalid count - skipping error simulation (clean transmission).\n");
+        } else {
+            for (i = 1; i <= numErrors; i++) {
+                printf("  Enter bit position #%d to flip (0 to %d): ", i, frameLen - 1);
+                scanf("%d", &bitPos);
+
+                if (bitPos >= 0 && bitPos < frameLen) {
+                    originalBit = fullBinaryFrame[bitPos];
+                    fullBinaryFrame[bitPos] = (originalBit == '0') ? '1' : '0';
+                    printf("    >>> Bit #%d flipped: '%c' -> '%c'\n",
+                        bitPos, originalBit, fullBinaryFrame[bitPos]);
+                } else {
+                    printf("    Invalid bit position #%d - skipped.\n", bitPos);
+                }
+            }
+        }
+    } else {
+        printf("  No error simulated - clean transmission.\n");
+    }
+
+    printf("\nStep 8: Final Transmitted Binary Frame Stream\n");
+    printf("  %s\n", fullBinaryFrame);
+
+    printf("\nStep 9: Write Divisor + Frame to Channel File\n");
+    saveBinaryFrameToFile("bisync_output.txt", divisor, fullBinaryFrame);
+    printf("  [Sender]: Frame stream and polynomial divisor saved to 'bisync_output.txt'\n\n");
+}
+
+/* ---- Read divisor (line 1) + full frame (line 2) from channel file ---- */
+int readBinaryFrameFromFile(const char *filename, char *divisor, char *binaryFrame, int maxLen) {
+    FILE *file;
+    int i;
+
+    file = fopen(filename, "r");
+    if (file == NULL) return 0;
+
+    if (fgets(divisor, 32, file) == NULL) { fclose(file); return 0; }
+    for (i = 0; divisor[i] != '\0'; i++) {
+        if (divisor[i] == '\r' || divisor[i] == '\n') { divisor[i] = '\0'; break; }
+    }
+
+    if (fgets(binaryFrame, maxLen, file) == NULL) { fclose(file); return 0; }
+    for (i = 0; binaryFrame[i] != '\0'; i++) {
+        if (binaryFrame[i] == '\r' || binaryFrame[i] == '\n') { binaryFrame[i] = '\0'; break; }
+    }
+
+    fclose(file);
+    return strlen(binaryFrame);
+}
+
+/* ---- Extract header/STX/ETX/trailer, verify CRC+parity,
+        and CLASSIFY the type of error (single-bit / multi-bit /
+        trailer-parity), exactly as rec-1.c does. ---- */
+int extractAndVerifyBinaryFrame(char *fullBinaryFrame, const char *divisor, char *stuffedBodyBinOut) {
+    int degree;
+    char synBin[9], sohBin[9], stxBin[9], etxBin[9];
+    char expectedHeader[25];
+    char *stxPos, *startOfPayload, *etxPos, *trailerPos;
+    int payloadBitLen;
+    char receivedTrailer[9];
+    char receivedParity;
+    char receivedCRC[32];
+    char computedParity;
+    char remainder[32];
+    int isRemainderZero;
+    int parityValid;
+    int i;
+
+    degree = strlen(divisor) - 1;
+
+    byteToBinary(SYN, synBin);
+    byteToBinary(SOH, sohBin);
+    byteToBinary(STX, stxBin);
+    byteToBinary(ETX, etxBin);
+
+    expectedHeader[0] = '\0';
+    strcat(expectedHeader, synBin);
+    strcat(expectedHeader, synBin);
+    strcat(expectedHeader, sohBin);
+
+    if (strncmp(fullBinaryFrame, expectedHeader, 24) != 0) {
+        printf("  [Error]: Invalid Binary Header Pattern (SYN SYN SOH error)!\n");
+        return 0;
+    }
+
+    stxPos = strstr(fullBinaryFrame + 24, stxBin);
+    if (stxPos == NULL) {
+        printf("  [Error]: STX Marker not found in binary stream!\n");
+        return 0;
+    }
+    startOfPayload = stxPos + 8;
+
+    etxPos = strstr(startOfPayload, etxBin);
+    if (etxPos == NULL) {
+        printf("  [Error]: ETX Marker not found in binary stream!\n");
+        return 0;
+    }
+
+    payloadBitLen = etxPos - startOfPayload;
+    strncpy(stuffedBodyBinOut, startOfPayload, payloadBitLen);
+    stuffedBodyBinOut[payloadBitLen] = '\0';
+
+    trailerPos = etxPos + 8;
+    strncpy(receivedTrailer, trailerPos, 8);
+    receivedTrailer[8] = '\0';
+
+    receivedParity = receivedTrailer[0];
+    strncpy(receivedCRC, &receivedTrailer[8 - degree], degree);
+    receivedCRC[degree] = '\0';
+
+    /* The exact textbook check: divide payload+receivedCRC directly.
+       No extra augmentation is added here - the received CRC bits
+       already occupy that role. Remainder must be all zeros. */
+    verifyCRCRemainder(stuffedBodyBinOut, receivedCRC, divisor, remainder);
+    computedParity = calculateEvenParityBinary(stuffedBodyBinOut);
+
+    isRemainderZero = 1;
+    for (i = 0; i < degree; i++) {
+        if (remainder[i] != '0') isRemainderZero = 0;
+    }
+    parityValid = (receivedParity == computedParity);
+
+    printf("\n  --------------------------------------------------------\n");
+    printf("              ERROR DETECTION & CLASSIFICATION           \n");
+    printf("  --------------------------------------------------------\n");
+    printf("  Received CRC Bits    : %s\n", receivedCRC);
+    printf("  Receiver Remainder   : %s  (%s)\n", remainder,
+        isRemainderZero ? "all zero - divisible, no error" : "NON-ZERO - error detected");
+    printf("  Received Parity Bit  : %c\n", receivedParity);
+    printf("  Computed Parity Bit  : %c\n", computedParity);
+    printf("  --------------------------------------------------------\n");
+
+    if (isRemainderZero && parityValid) {
+        printf("  Error Classification : NO ERROR DETECTED\n");
+        printf("  Result               : ACCEPTED (Valid Frame)\n");
+        printf("  ========================================================\n");
+        return 1;
+    }
+
+    printf("  Result               : REJECTED (Frame Corrupted!)\n");
+    printf("  >>> ERROR ANALYSIS <<<\n");
+
+    if (!parityValid && !isRemainderZero) {
+        printf("  Detected Error Type  : SINGLE-BIT (OR ODD-NUMBER BIT) ERROR\n");
+        printf("  Reason               : Both Parity Check and CRC Division Failed.\n");
+    } else if (parityValid && !isRemainderZero) {
+        printf("  Detected Error Type  : MULTI-BIT (EVEN-NUMBER BIT) ERROR\n");
+        printf("  Reason               : CRC Failed, but Even Parity bit cancelled out.\n");
+    } else {
+        printf("  Detected Error Type  : TRAILER / PARITY BIT CORRUPTION\n");
+        printf("  Reason               : CRC Passed, but Parity Bit Mismatched.\n");
+    }
+
+    printf("  ========================================================\n");
+    return 0;
+}
+
+/* ---- Reverse the character stuffing back to original text ---- */
+void performCharacterDestuffing(const char *stuffedBody, int stuffedLen, char *restoredText) {
+    int inIdx = 0, outIdx = 0;
+    unsigned char currentByte, nextByte;
+
+    printf("\n  --- Starting BISYNC Destuffing ---\n");
+    while (inIdx < stuffedLen) {
+        currentByte = (unsigned char)stuffedBody[inIdx];
+        if (currentByte == DLE) {
+            nextByte = (unsigned char)stuffedBody[inIdx + 1];
+            if (nextByte == DLE) {
+                printf("  Found stuffed DLE (0x10 0x10) -> Restoring text 'DLE'\n");
+                restoredText[outIdx++] = 'D';
+                restoredText[outIdx++] = 'L';
+                restoredText[outIdx++] = 'E';
+                inIdx += 2;
+            } else if (nextByte == ETX) {
+                printf("  Found stuffed ETX (0x10 0x03) -> Restoring text 'ETX'\n");
+                restoredText[outIdx++] = 'E';
+                restoredText[outIdx++] = 'T';
+                restoredText[outIdx++] = 'X';
+                inIdx += 2;
+            } else {
+                restoredText[outIdx++] = nextByte;
+                inIdx += 2;
+            }
+        } else {
+            restoredText[outIdx++] = stuffedBody[inIdx++];
+        }
+    }
+    restoredText[outIdx] = '\0';
+    printf("  --- Destuffing complete ---\n");
+}
+
+/* ---- RECEIVER: read divisor+frame from file, verify, classify,
+        destuff, recover message ---- */
+void bisyncCrcReceive(void) {
+    char divisor[32];
+    char fullBinaryFrame[FRAME_BUF2];
+    char stuffedBodyBin[FRAME_BUF2];
+    int payloadBitLen, stuffedLen;
+    char stuffedBodyBytes[2000];
+    char temp8[9];
+    char restoredText[2000];
+    int i, b;
+    unsigned char val;
+
+    printf("----- BISYNC + CRC FRAMING : RECEIVER -----\n");
+    printf("Step 1: Read Divisor + Frame from Channel File\n");
+    if (!readBinaryFrameFromFile("bisync_output.txt", divisor, fullBinaryFrame, FRAME_BUF2)) {
+        printf("  ERROR: could not read 'bisync_output.txt'\n\n");
+        return;
+    }
+    printf("  Divisor Used  : %s\n", divisor);
+    printf("  Frame Stream  : %s\n", fullBinaryFrame);
+
+    printf("\nStep 2: Extract & Verify Frame (Header / STX / ETX / Trailer)\n");
+    if (!extractAndVerifyBinaryFrame(fullBinaryFrame, divisor, stuffedBodyBin)) {
+        printf("\n");
+        return;
+    }
+
+    payloadBitLen = strlen(stuffedBodyBin);
+    stuffedLen = payloadBitLen / 8;
+    for (i = 0; i < stuffedLen; i++) {
+        strncpy(temp8, &stuffedBodyBin[i * 8], 8);
+        temp8[8] = '\0';
+        val = 0;
+        for (b = 0; b < 8; b++) val = (val << 1) | (unsigned char)(temp8[b] - '0');
+        stuffedBodyBytes[i] = (char)val;
+    }
+
+    printf("\nStep 3: Character Destuffing\n");
+    performCharacterDestuffing(stuffedBodyBytes, stuffedLen, restoredText);
+
+    printf("\nStep 4: Deframing Complete\n");
+    printf("  Destuffed Payload Restored: \"%s\"\n\n", restoredText);
+}
+
+/* ============================================================
+   MAIN: EXP0 layers, then EXP1 framing inserted right after
+   the Data Link Layer's full stream is built.
+   ============================================================ */
+
+int main() {
+    char srcUrl[50], dstUrl[50];
+    int srcIndex, dstIndex;
+    char srcIP[20], dstIP[20], srcMAC[20], dstMAC[20];
+    char srcIPBin[40], dstIPBin[40], srcMACBin[60], dstMACBin[60];
+    char fileName[100];
+    FILE *readFile;
+    char message[500];
+    int msgLength = 0;
+    int c;
+    char bits[MAX_BITS];
+    int i;
+    int totalBits;
+    int srcPort, dstPort;
+    char srcPortBin[17], dstPortBin[17];
+    char transportStream[MAX_BITS];
+    int transportTotalBits;
+    char networkStream[MAX_BITS];
+    int networkTotalBits;
+    int packetSize;
+    int numPackets;
+    char packets[200][17];
+    int p, b, pos, k;
+    char trailer[9];
+    char dataLinkStream[MAX_BITS];
+    int dataLinkTotalBits;
+    int frameSize;
+    int framesPerPacket;
+    int totalFrames;
+    int frameNumber;
+    char frameData[9];
+    int start;
+
+    srand(time(NULL));
+
+    printf("=====================================================\n");
+    printf("     SIMPLE 4-LAYER NETWORK SIMULATOR (in binary)\n");
+    printf("=====================================================\n\n");
+
+    insertURL("google.com",    "142.250.193.14",  "3C:5A:B4:1D:9F:02");
+    insertURL("youtube.com",   "142.250.72.14",   "A4:5E:60:D3:2B:19");
+    insertURL("facebook.com",  "157.240.22.35",   "F0:2F:74:6B:88:11");
+    insertURL("amazon.com",    "205.251.242.103", "B8:27:EB:9A:3C:44");
+    insertURL("wikipedia.org", "208.80.154.224",  "00:1A:2B:3C:4D:5E");
+
+    printTable();
+
+    printf("Enter SOURCE URL (example: google.com): ");
+    scanf("%s", srcUrl);
+    printf("Enter DESTINATION URL (example: youtube.com): ");
+    scanf("%s", dstUrl);
+    getchar();
+
+    srcIndex = searchURL(srcUrl);
+    if (srcIndex == -1) {
+        char newIp[20], newMac[20];
+        makeRandomIP(newIp);
+        makeRandomMAC(newMac);
+        insertURL(srcUrl, newIp, newMac);
+        srcIndex = searchURL(srcUrl);
+        printf("\n(\"%s\" was not in the table, so a new IP/MAC was created)\n", srcUrl);
+    }
+
+    dstIndex = searchURL(dstUrl);
+    if (dstIndex == -1) {
+        char newIp[20], newMac[20];
+        makeRandomIP(newIp);
+        makeRandomMAC(newMac);
+        insertURL(dstUrl, newIp, newMac);
+        dstIndex = searchURL(dstUrl);
+        printf("\n(\"%s\" was not in the table, so a new IP/MAC was created)\n", dstUrl);
+    }
+
+    strcpy(srcIP,  ipTable[srcIndex]);
+    strcpy(dstIP,  ipTable[dstIndex]);
+    strcpy(srcMAC, macTable[srcIndex]);
+    strcpy(dstMAC, macTable[dstIndex]);
+
+    ipToBinary32(srcIP, srcIPBin);
+    ipToBinary32(dstIP, dstIPBin);
+    macToBinary48(srcMAC, srcMACBin);
+    macToBinary48(dstMAC, dstMACBin);
+
+    printf("\n----------------- ADDRESS RESOLUTION -----------------\n");
+    printf("SOURCE      : %s -> IP %s -> MAC %s\n", srcUrl, srcIP, srcMAC);
+    printf("   IP  binary  (32 bits): %s\n", srcIPBin);
+    printf("   MAC binary  (48 bits): %s\n", srcMACBin);
+    printf("DESTINATION : %s -> IP %s -> MAC %s\n", dstUrl, dstIP, dstMAC);
+    printf("   IP  binary  (32 bits): %s\n", dstIPBin);
+    printf("   MAC binary  (48 bits): %s\n", dstMACBin);
+    printf("-------------------------------------------------------\n\n");
+
+    printf("Enter the file name that contains the message (example: message.txt): ");
+    scanf("%s", fileName);
+    getchar();
+
+    readFile = fopen(fileName, "r");
+    if (readFile == NULL) {
+        printf("ERROR: could not open %s (make sure the file already exists)\n", fileName);
+        return 1;
+    }
+
+    while ((c = fgetc(readFile)) != EOF && msgLength < 499) {
+        if (c == '\n' || c == '\r') continue;
+        message[msgLength] = (char) c;
+        msgLength++;
+    }
+    message[msgLength] = '\0';
+    fclose(readFile);
+
+    printf("=============== APPLICATION LAYER ===============\n");
+    printf("Message read from %s: \"%s\"\n\n", fileName, message);
+
+    bits[0] = '\0';
+    for (i = 0; i < msgLength; i++) {
+        char oneByte[9];
+        byteToBinary((int)(unsigned char)message[i], oneByte);
+        strcat(bits, oneByte);
+        printf("  '%c'  ->  %s\n", message[i], oneByte);
+    }
+    totalBits = msgLength * 8;
+
+    printf("\nStream      : %s\n", bits);
+    printf("Total Bits  : %d bits\n", totalBits);
+    printf("===================================================\n\n");
+
+    srcPort = 1024 + rand() % (65535 - 1024 + 1);
+    dstPort = 1024 + rand() % (65535 - 1024 + 1);
+    numberToBinary16(srcPort, srcPortBin);
+    numberToBinary16(dstPort, dstPortBin);
+
+    sprintf(transportStream, "%s%s%s", srcPortBin, dstPortBin, bits);
+    transportTotalBits = 16 + 16 + totalBits;
+
+    printf("=============== TRANSPORT LAYER ===============\n");
+    printf("Source Port      : %d  (binary: %s)\n", srcPort, srcPortBin);
+    printf("Destination Port : %d  (binary: %s)\n", dstPort, dstPortBin);
+    printf("Stream           : %s\n", transportStream);
+    printf("Total Bits       : %d bits\n", transportTotalBits);
+    printf("=================================================\n\n");
+
+    sprintf(networkStream, "%s%s%s", srcIPBin, dstIPBin, bits);
+    networkTotalBits = 32 + 32 + totalBits;
+
+    printf("=============== NETWORK LAYER ===============\n");
+    printf("Source IP        : %s\n", srcIPBin);
+    printf("Destination IP   : %s\n", dstIPBin);
+    printf("Stream           : %s\n", networkStream);
+    printf("Total Bits       : %d bits\n\n", networkTotalBits);
+
+    packetSize = 16;
+    numPackets = totalBits / packetSize;
+    if (totalBits % packetSize != 0) {
+        numPackets++;
+    }
+
+    printf("Total packets: %d\n", numPackets);
+
+    for (p = 0; p < numPackets; p++) {
+        start = p * packetSize;
+        for (b = 0; b < packetSize; b++) {
+            pos = start + b;
+            if (pos < totalBits) {
+                packets[p][b] = bits[pos];
+            } else {
+                packets[p][b] = '0';
+            }
+        }
+        packets[p][packetSize] = '\0';
+    }
+    printf("===============================================\n\n");
+
+    strcpy(trailer, "00000000");
+
+    sprintf(dataLinkStream, "%s%s%s%s", srcMACBin, dstMACBin, networkStream, trailer);
+    dataLinkTotalBits = 48 + 48 + networkTotalBits + 8;
+
+    printf("=============== DATA LINK LAYER ===============\n");
+    printf("Source MAC       : %s\n", srcMACBin);
+    printf("Destination MAC  : %s\n", dstMACBin);
+    printf("Stream           : %s\n", dataLinkStream);
+    printf("Total Bits       : %d bits\n\n", dataLinkTotalBits);
+
+    printf("Data             : %s\n", bits);
+    printf("Src Port         : %s\n", srcPortBin);
+    printf("Dest Port        : %s\n", dstPortBin);
+    printf("Src IP           : %s\n", srcIPBin);
+    printf("Dest IP          : %s\n", dstIPBin);
+    printf("Src MAC          : %s\n", srcMACBin);
+    printf("Dest MAC         : %s\n", dstMACBin);
+    printf("Trailer          : %s\n", trailer);
+    printf("Full Stream      : %s%s%s%s%s%s%s%s\n\n",
+           bits, srcPortBin, dstPortBin, srcIPBin, dstIPBin, srcMACBin, dstMACBin, trailer);
+
+    /* ========================================================
+       EXP1 + EXP2 START HERE: the Data Link layer has the full
+       stream above. Before it gets chopped into raw frames,
+       hand the ORIGINAL MESSAGE directly to the BISYNC framing
+       protocol (Exp1), now extended with a user-defined CRC
+       polynomial + Even Parity error detection (Exp2).
+       ======================================================== */
+    printf("=========================================================\n");
+    printf("   EXP1 + EXP2: BISYNC FRAMING WITH CRC & PARITY CHECK\n");
+    printf("=========================================================\n");
+    printf("The message above is now framed using BISYNC (SYN SYN SOH\n");
+    printf("...STX...ETX), with CRC + Even Parity error detection\n");
+    printf("added on top (Exp2).\n\n");
+
+    bisyncCrcSend(message, msgLength);
+    bisyncCrcReceive();
+
+    printf("=========================================================\n\n");
+    /* ==================== EXP1 + EXP2 END ==================== */
+
+    frameSize = 8;
+    framesPerPacket = packetSize / frameSize;
+    totalFrames = numPackets * framesPerPacket;
+
+    printf("Total frames: %d\n\n", totalFrames);
+
+    printf("====Each frame and its content======\n\n");
+
+    for (p = 0; p < numPackets; p++) {
+        for (frameNumber = 1; frameNumber <= framesPerPacket; frameNumber++) {
+            start = (frameNumber - 1) * frameSize;
+            for (k = 0; k < frameSize; k++) {
+                frameData[k] = packets[p][start + k];
+            }
+            frameData[frameSize] = '\0';
+
+            printf("---------------------------------------------\n");
+            printf("Packet No : %d\n", p + 1);
+            printf("Frame No  : %d\n", frameNumber);
+            printf("Source Port      : %s\n", srcPortBin);
+            printf("Destination Port : %s\n\n", dstPortBin);
+            printf("Source IP        : %s\n", srcIPBin);
+            printf("Destination IP   : %s\n", dstIPBin);
+            printf("Source MAC       : %s\n", srcMACBin);
+            printf("Destination MAC  : %s\n", dstMACBin);
+            printf("Frame Data       : %s\n", frameData);
+            printf("Trailer          : %s\n", trailer);
+
+            printf("Frame Stream     : %s%s%s%s\n", trailer, srcMACBin, dstMACBin, frameData);
+        }
+    }
+    printf("---------------------------------------------\n\n");
+
+    printf("=============== SUMMARY ===============\n");
+    printf("Message              : \"%s\"\n", message);
+    printf("Application bits     : %d\n", totalBits);
+    printf("Transport layer bits : %d\n", transportTotalBits);
+    printf("Network layer bits   : %d\n", networkTotalBits);
+    printf("Data Link layer bits : %d\n", dataLinkTotalBits);
+    printf("Total packets        : %d\n", numPackets);
+    printf("Total frames         : %d\n", totalFrames);
+    printf("=========================================\n");
+
+    return 0;
+}
+
+
+
+
+
+Own_Parity.c
+#include <stdio.h>
+#include <string.h>
+
+/* Convert one character into its 7-bit binary representation */
+void toBinary7(char ch, char out[])
+{
+    int value = ch;
+
+    for (int i = 6; i >= 0; i--)
+    {
+        out[i] = (value & 1) ? '1' : '0';
+        value >>= 1;
+    }
+
+    out[7] = '\0';
+}
+
+/* Append an 8th (even-parity) bit to the 7-bit data */
+void addEvenParity(char data[], char byte[])
+{
+    int count = 0;
+
+    for (int i = 0; i < 7; i++)
+    {
+        byte[i] = data[i];
+
+        if (data[i] == '1')
+            count++;
+    }
+
+    if (count % 2 == 0)
+        byte[7] = '0';
+    else
+        byte[7] = '1';
+
+    byte[8] = '\0';
+}
+
+/* Print a section header banner */
+void printHeader(const char *title)
+{
+    printf("\n+------------------------------------------+\n");
+    printf("| %-40s |\n", title);
+    printf("+------------------------------------------+\n");
+}
+
+/* Print a bit-stream, with a byte index above each 8-bit group */
+void printByte(char out[])
+{
+    int len = strlen(out);
+    int totalBytes = len / 8;
+
+    printf("       ");
+    for (int b = 1; b <= totalBytes; b++)
+        printf(" Byte%-2d  ", b);
+    printf("\n");
+
+    printf("Bits : ");
+    for (int i = 0; out[i] != '\0'; i++)
+    {
+        if (i > 0 && i % 8 == 0)
+            printf(" | ");
+
+        printf("%c", out[i]);
+    }
+    printf("\n");
+}
+
+/* Check even parity for every 8-bit byte in the stream */
+void parityCheck(char out[])
+{
+    int byteNo = 1;
+
+    printf("+--------+----------+----------------------+\n");
+    printf("| %-6s | %-8s | %-20s |\n", "Byte", "Ones", "Status");
+    printf("+--------+----------+----------------------+\n");
+
+    for (int i = 0; out[i] != '\0'; i += 8)
+    {
+        int count = 0;
+
+        for (int j = 0; j < 8; j++)
+        {
+            if (out[i + j] == '1')
+                count++;
+        }
+
+        printf("| %-6d | %-8d | %-20s |\n",
+               byteNo,
+               count,
+               (count % 2 == 0) ? "OK  (Even Parity)" : "FAIL (Parity Error)");
+
+        byteNo++;
+    }
+
+    printf("+--------+----------+----------------------+\n");
+}
+
+/* Let the user simulate transmission errors by flipping chosen bits */
+void change(char out[])
+{
+    int totalBytes = strlen(out) / 8;
+    int targetByte, totalChanges, bitPos;
+    char choice;
+
+    printHeader("Simulate Transmission Error");
+
+    printf(">> Do you want to change any bit? (y/n): ");
+    scanf(" %c", &choice);
+
+    if (choice != 'y' && choice != 'Y')
+        return;
+
+    printf(">> Which byte do you want to change? (1-%d): ", totalBytes);
+    scanf("%d", &targetByte);
+
+    if (targetByte < 1 || targetByte > totalBytes)
+    {
+        printf("   [!] Invalid Byte!\n");
+        return;
+    }
+
+    printf(">> How many bits do you want to change? ");
+    scanf("%d", &totalChanges);
+
+    for (int i = 0; i < totalChanges; i++)
+    {
+        printf("\n   -- Change %d of %d --\n", i + 1, totalChanges);
+
+        printf("   Enter bit position (1-8): ");
+        scanf("%d", &bitPos);
+
+        if (bitPos < 1 || bitPos > 8)
+        {
+            printf("   [!] Invalid Position!\n");
+            i--;
+            continue;
+        }
+
+        int index = (targetByte - 1) * 8 + (bitPos - 1);
+
+        if (out[index] == '0')
+            out[index] = '1';
+        else
+            out[index] = '0';
+
+        printf("   [OK] Bit flipped successfully.\n");
+    }
+
+    printf("\nModified Data:\n");
+    printByte(out);
+}
+
+int main()
+{
+    char input[100];
+    char result[800] = "";
+    char seven[8];
+    char byte[9];
+
+    printf("===========================================\n");
+    printf("        EVEN PARITY CHECK SIMULATOR        \n");
+    printf("===========================================\n");
+
+    printf("\nEnter String : ");
+    scanf("%s", input);
+
+    for (int i = 0; input[i] != '\0'; i++)
+    {
+        toBinary7(input[i], seven);
+        addEvenParity(seven, byte);
+        strcat(result, byte);
+    }
+
+    printHeader("Transmitted Data");
+    printByte(result);
+
+    printHeader("Initial Parity Check");
+    parityCheck(result);
+
+    change(result);
+
+    printHeader("Final Parity Check");
+    parityCheck(result);
+
+
+    return 0;
+}
+
+

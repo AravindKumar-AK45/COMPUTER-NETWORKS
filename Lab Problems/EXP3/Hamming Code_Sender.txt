@@ -1,0 +1,194 @@
+Hamming Code_Sender:
+#include <stdio.h>
+#include <stdlib.h>
+
+#define MAX_CHAR 100
+#define DATA_BITS 7
+#define CODE_SIZE 12
+
+int dataBits[MAX_CHAR][DATA_BITS];
+int codeword[MAX_CHAR][CODE_SIZE];
+char text[MAX_CHAR + 1];
+int totalChars;
+
+/* positions 1, 2, 4, 8 are parity bit positions in the codeword */
+int isCheckPosition(int pos) {
+    if (pos == 1 || pos == 2 || pos == 4 || pos == 8) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+int checkBit(int position, int mask) {
+    if ((position & mask) != 0) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+void readMessage() {
+    FILE *fp;
+    int ch;
+    int b;
+
+    fp = fopen("input.txt", "r");
+    if (fp == NULL) {
+        printf("Cannot open input.txt\n");
+        exit(1);
+    }
+
+    totalChars = 0;
+    ch = fgetc(fp);
+    while (ch != EOF && totalChars < MAX_CHAR) {
+        if (ch == '\n' || ch == '\r') {
+            ch = fgetc(fp);
+            continue;
+        }
+
+        text[totalChars] = ch;
+
+        for (b = 6; b >= 0; b--) {
+            if ((ch >> b) & 1) {
+                dataBits[totalChars][6 - b] = 1;
+            } else {
+                dataBits[totalChars][6 - b] = 0;
+            }
+        }
+
+        totalChars++;
+        ch = fgetc(fp);
+    }
+
+    text[totalChars] = '\0';
+    fclose(fp);
+}
+
+void showBits() {
+    int i, j;
+
+    printf("Binary value of the message:\n");
+    for (i = 0; i < totalChars; i++) {
+        printf("%c : ", text[i]);
+        for (j = 0; j < DATA_BITS; j++) {
+            printf("%d", dataBits[i][j]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+void makeHamming(int row) {
+    int i, dataIndex, pos, parityPos, sum, j, totalOnes;
+
+    for (i = 0; i < CODE_SIZE; i++) {
+        codeword[row][i] = 0;
+    }
+
+    /* put the 7 data bits into the non parity positions */
+    dataIndex = 0;
+    for (pos = 1; pos <= 11; pos++) {
+        if (isCheckPosition(pos) == 0) {
+            codeword[row][pos] = dataBits[row][dataIndex];
+            dataIndex++;
+        }
+    }
+
+    /* work out parity bits 1, 2, 4, 8 */
+    parityPos = 1;
+    while (parityPos <= 8) {
+        sum = 0;
+        for (j = 1; j <= 11; j++) {
+            if (checkBit(j, parityPos) == 1) {
+                sum = sum + codeword[row][j];
+            }
+        }
+        codeword[row][parityPos] = sum % 2;
+        parityPos = parityPos * 2;
+    }
+
+    /* overall parity bit goes in position 0 */
+    totalOnes = 0;
+    for (j = 1; j <= 11; j++) {
+        if (codeword[row][j] == 1) {
+            totalOnes++;
+        }
+    }
+    codeword[row][0] = totalOnes % 2;
+}
+
+void makeAllHamming() {
+    int i;
+
+    for (i = 0; i < totalChars; i++) {
+        makeHamming(i);
+    }
+}
+
+void injectError() {
+    char choice;
+    int charNum, bitPos;
+
+    printf("Do you want to add an error before sending? (y/n): ");
+    scanf(" %c", &choice);
+
+    if (choice == 'y' || choice == 'Y') {
+        printf("Enter character number (1 to %d): ", totalChars);
+        scanf("%d", &charNum);
+        printf("Enter bit index (0 to 11): ");
+        scanf("%d", &bitPos);
+
+        charNum = charNum - 1;
+
+        if (charNum >= 0 && charNum < totalChars && bitPos >= 0 && bitPos < CODE_SIZE) {
+            if (codeword[charNum][bitPos] == 1) {
+                codeword[charNum][bitPos] = 0;
+            } else {
+                codeword[charNum][bitPos] = 1;
+            }
+            printf("Error added on character %d at bit %d\n", charNum + 1, bitPos);
+        } else {
+            printf("Wrong character number or bit index\n");
+        }
+    } else {
+        printf("Sending message without any error\n");
+    }
+}
+
+void writeFile() {
+    FILE *fp;
+    int i, j;
+
+    fp = fopen("transmitted.txt", "w");
+    if (fp == NULL) {
+        printf("Cannot create transmitted.txt\n");
+        exit(1);
+    }
+
+    fprintf(fp, "%d\n", totalChars);
+    for (i = 0; i < totalChars; i++) {
+        for (j = 0; j < CODE_SIZE; j++) {
+            fprintf(fp, "%d ", codeword[i][j]);
+        }
+        fprintf(fp, "\n");
+    }
+
+    fclose(fp);
+    printf("Sender: Hamming codewords saved to transmitted.txt\n");
+}
+
+int main() {
+    readMessage();
+
+    printf("Message read: %s\n", text);
+    printf("Total characters: %d\n\n", totalChars);
+
+    showBits();
+    makeAllHamming();
+    injectError();
+    writeFile();
+
+    return 0;
+}
+
