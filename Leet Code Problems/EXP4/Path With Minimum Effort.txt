@@ -1,0 +1,88 @@
+#include <stdlib.h>
+#include <limits.h>
+
+int minimumEffortPath(int** heights, int heightsSize, int* heightsColSize)
+{
+    int rows = heightsSize;
+    int cols = heightsColSize[0];
+
+    int total = rows * cols;
+
+    int *dist = malloc(total * sizeof(int));
+    int *visited = calloc(total, sizeof(int));
+
+    // Initially, effort to every cell is infinity
+    for (int i = 0; i < total; i++)
+        dist[i] = INT_MAX;
+
+    // Starting cell
+    dist[0] = 0;
+
+    // Dijkstra
+    for (int count = 0; count < total; count++)
+    {
+        int current = -1;
+        int minEffort = INT_MAX;
+
+        // Find unvisited cell with minimum effort
+        for (int i = 0; i < total; i++)
+        {
+            if (!visited[i] && dist[i] < minEffort)
+            {
+                minEffort = dist[i];
+                current = i;
+            }
+        }
+
+        if (current == -1)
+            break;
+
+        // Destination reached
+        if (current == total - 1)
+            break;
+
+        visited[current] = 1;
+
+        int r = current / cols;
+        int c = current % cols;
+
+        // Four possible directions
+        int dr[] = {-1, 1, 0, 0};
+        int dc[] = {0, 0, -1, 1};
+
+        for (int d = 0; d < 4; d++)
+        {
+            int nr = r + dr[d];
+            int nc = c + dc[d];
+
+            // Check boundaries
+            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols)
+                continue;
+
+            int next = nr * cols + nc;
+
+            if (visited[next])
+                continue;
+
+            // Height difference between current and next cell
+            int difference = abs(heights[r][c] - heights[nr][nc]);
+
+            // Effort of this new path
+            int newEffort = dist[current] > difference
+                            ? dist[current]
+                            : difference;
+
+            if (newEffort < dist[next])
+            {
+                dist[next] = newEffort;
+            }
+        }
+    }
+
+    int answer = dist[total - 1];
+
+    free(dist);
+    free(visited);
+
+    return answer;
+}

@@ -1,0 +1,56 @@
+#include <stdlib.h>
+#include <limits.h>
+
+int findCheapestPrice(int n, int** flights, int flightsSize,
+                      int* flightsColSize, int src, int dst, int k)
+{
+    int *dist = malloc(n * sizeof(int));
+    int *temp = malloc(n * sizeof(int));
+
+    // Initially all cities are unreachable
+    for (int i = 0; i < n; i++)
+        dist[i] = INT_MAX;
+
+    // Cost to reach source is 0
+    dist[src] = 0;
+
+    // At most k stops = k + 1 flights
+    for (int step = 0; step <= k; step++)
+    {
+        // Copy previous distances
+        for (int i = 0; i < n; i++)
+            temp[i] = dist[i];
+
+        // Relax every flight
+        for (int i = 0; i < flightsSize; i++)
+        {
+            int from = flights[i][0];
+            int to = flights[i][1];
+            int price = flights[i][2];
+
+            if (dist[from] != INT_MAX)
+            {
+                int newCost = dist[from] + price;
+
+                if (newCost < temp[to])
+                    temp[to] = newCost;
+            }
+        }
+
+        // Update distances
+        for (int i = 0; i < n; i++)
+            dist[i] = temp[i];
+    }
+
+    int answer;
+
+    if (dist[dst] == INT_MAX)
+        answer = -1;
+    else
+        answer = dist[dst];
+
+    free(dist);
+    free(temp);
+
+    return answer;
+}

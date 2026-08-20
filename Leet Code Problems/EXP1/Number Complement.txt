@@ -1,0 +1,15 @@
+1.Number Complement
+  
+int findComplement(int num) {
+    unsigned int mask = 1;
+    
+    // Find a mask of all 1s matching the bit length of num
+    while (mask < num) {
+        mask = (mask << 1) | 1;
+    }
+    
+    // XORing with the mask flips all bits within that range
+    return num ^ mask;
+}
+
+
